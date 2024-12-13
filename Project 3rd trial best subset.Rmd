@@ -1,0 +1,700 @@
+---
+title: "Project 3rd Trial with best subset selection $ RandomForest feature importance"
+author: "Ertugrul Turkseven"
+date: "2024-12-10"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# file.choose()
+
+customer_data <- read.csv("/Users/ertuboston/Documents/Data_Science_Merrimack/DSE6111 - Predictive Modelling/PROJECT/customer_data.csv")
+```
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(corrplot)
+library(gmodels)
+library(corrplot)
+library(randomForest)
+library(class)
+library(caret)
+library(leaps)
+```
+
+```{r}
+colnames(customer_data)
+dim(customer_data) # When we seperate the data into training and testing
+# we will have an issue about not having the same length since the row number is
+# an odd number. So I will remove one row randomly, I am not sure if it is an okay
+# solution but I couldn't find any other way
+
+set.seed(1)
+random_row <- sample(1:length(customer_data), 1)
+customer_data <- customer_data[-random_row, ]
+nrow(customer_data)
+```
+
+```{r}
+summary(customer_data)
+```
+
+```{r}
+## Lets check if we have any missing values
+
+colSums(is.na(customer_data)) # No missing values
+```
+
+```{r}
+# ???
+# Lets check the correlation heat map to understand the relationship
+# between numerical variables. 
+
+# first we need to create sub dataset for only numerical variables.
+customer_numeric <- customer_data %>%
+                          select_if(is.numeric)
+
+cor_matrix <- cor(customer_numeric, use = "complete.obs")
+
+# Create a heatmap of the correlation matrix
+corrplot(cor_matrix, method = "circle", type = "upper", 
+         tl.cex = 0.8, # Adjust text label size
+         col = colorRampPalette(c("blue", "white", "red"))(300), # Color scale
+         #addCoef.col = "black", # Add correlation coefficients on the plot
+         number.cex = 0.7) # Adjust number size
+
+# Avg_open_to_buy and Avg_utilization_ratio has a high correlance. We don't
+# want to create an overfitting model, and for this reason we would exlude that
+# variable from our model and keep avg_utilization_ratio.
+```
+
+```{r}
+# Lets check the correlation between numerical values
+cor(customer_numeric)
+
+```
+
+
+
+```{r}
+## Let check the data types and if we have any categorical data, convert it to
+## factors
+
+str(customer_data)
+customer_data$Gender <- as.factor(customer_data$Gender)
+customer_data$Education_Level <- as.factor(customer_data$Education_Level)
+# levels(customer_data$Education_Level)
+customer_data$Marital_Status <- as.factor(customer_data$Marital_Status)
+customer_data$Card_Category <- as.factor(customer_data$Card_Category)
+customer_data$Income_Category <- as.factor(customer_data$Income_Category)
+customer_data$Attrition_Flag <- factor(ifelse(customer_data$Attrition_Flag == "Attrited Customer", 1, 0))
+                                       
+# if the account is closed Attrited Customer = 1 else 0
+
+levels(customer_data$Attrition_Flag)
+levels(customer_data$Income_Category)
+levels(customer_data$Marital_Status)
+levels(customer_data$Card_Category)
+
+str(customer_data$Attrition_Flag)
+ # for factors we get the frequencies in the data
+```
+
+
+## Lets split the data into trainig and testing set. 
+
+```{r}
+set.seed(1)
+n = nrow(customer_data)
+z = sample(n,n/2)
+
+training <- customer_data[z, ]
+testing <- customer_data[-z, ] # The ones they are not in training
+```
+
+## Best subset selection
+
+```{r}
+set.seed(1)
+best.subset <- regsubsets(Attrition_Flag ~ ., data = training, nvmax = ncol(training)-1)
+
+best.subset.summary <- summary(best.subset)
+# best.subset.summary
+
+# plot  RSS, adjusted R^2, Cp and BIC
+
+par(mfrow = c(2,2))
+plot(best.subset.summary$rss, xlab = "Number of Variables", ylab = "RSS", type = "l")
+plot(best.subset.summary$adjr2, xlab = "Number of Variables", ylab = "Adjusted RSq", type = "l")
+
+
+# To extract the best model we need the highest adjusted R^2 or lowest Cp or
+# lowest BIC
+
+# the predictors  that has lowest BIC
+optimal.model <- which.min(best.subset.summary$bic)
+optimal.model.variables <- names(which(best.subset.summary$which[optimal.model, ]))[-1]
+# with [-1] I took the intercept out.
+print(optimal.model.variables)
+```
+
+
+```{r}
+# Before finalizing if these variables are good or not, I will check their
+# importance and performance:
+
+# Lets check Multicollinearity by using VIF to ensure the predictors are not 
+# highly correlated.
+library(car)
+selected.predictors <- c("Gender","Marital_Status","Total_Relationship_Count",
+                         "Months_Inactive_12_mon","Contacts_Count_12_mon",
+                         "Total_Revolving_Bal","Total_Amt_Chng_Q4_Q1",
+                         "Total_Trans_Amt","Total_Trans_Ct","Total_Ct_Chng_Q4_Q1")
+vif.model <- glm(Attrition_Flag ~ ., data = training[ ,c(selected.predictors,"Attrition_Flag")],
+                 family = binomial)
+vif(vif.model)
+
+
+# We have high multicollinearity between predictors total_trans_amt and 
+# total_trans_ct. 
+```
+
+```{r}
+## Check the importance of features from the entire predictors
+
+set.seed(1)
+library(randomForest)
+rf.model.1 <- randomForest(Attrition_Flag ~ ., data = training, importance = TRUE)
+
+importance(rf.model.1) #( 0 = existing customers, 1 = attrited customers)
+varImpPlot(rf.model.1)
+
+
+```
+
+
+```{r}
+# Check the importance of features(predictors) from the selected predictors
+# (best subset selection)
+
+# Use random forest.
+set.seed(1)
+library(randomForest)
+rf.model <- randomForest(Attrition_Flag ~ Gender + Marital_Status +
+                           Total_Relationship_Count + Months_Inactive_12_mon +
+                           Contacts_Count_12_mon + Total_Revolving_Bal +
+                           Total_Amt_Chng_Q4_Q1 + Total_Trans_Amt + Total_Ct_Chng_Q4_Q1,
+                         data = training, importance = TRUE)
+importance(rf.model) # View feature importance
+varImpPlot(rf.model) # Visualize feature importance
+
+# Most important features = "Total_Trans_Amt","Total_Ct_Chng_Q4_Q1","Total_Revolving_Bal"
+# "Total_Amt_Chng_Q4_Q1", "Total_Relationship_Count"
+```
+
+
+## Lets create the models, start with logistic regression by using selected.predictors
+
+```{r}
+
+## We used selected.predictors except Total_Trans_Ct, since it had high correlation
+## with Total_Trans_Amt. 
+set.seed(1)
+glm.model.1 <- glm(Attrition_Flag ~ Gender + Marital_Status + Total_Relationship_Count +
+                   Months_Inactive_12_mon + Contacts_Count_12_mon + Total_Revolving_Bal +
+                   Total_Amt_Chng_Q4_Q1 + Total_Trans_Amt + Total_Ct_Chng_Q4_Q1,
+                   data = training, family = binomial)
+summary(glm.model.1)
+summary.glm.1 <- paste("Null deviance: 4491.4, 
+                  Residual deviance: 3113.7
+                  AIC: 3137.7", sep = "\n")
+
+###############################################################################
+## Lets create one more logistic regression with sub predictors.
+
+glm.model.2 <- glm(Attrition_Flag ~ Total_Ct_Chng_Q4_Q1 + Total_Trans_Amt +
+                     Total_Relationship_Count + Total_Amt_Chng_Q4_Q1 + 
+                     Avg_Utilization_Ratio + Contacts_Count_12_mon, data = training,
+                   family = binomial)
+
+summary(glm.model.2)
+summary.glm.2 <- paste("Null deviance: 4491.4
+                        Residual deviance: 3327.4
+                        AIC: 3341.1", sep = "\n")
+
+###############################################################################
+# Lets create a model with predictors of random forest feature importance
+glm.model.3 <- glm(Attrition_Flag ~ Total_Trans_Amt + Total_Ct_Chng_Q4_Q1 + 
+                     Total_Revolving_Bal + Total_Amt_Chng_Q4_Q1 + 
+                     Total_Relationship_Count, data = training, family = binomial)
+summary(glm.model.3)
+summary.glm.3 <- paste("Null deviance: 4491.4
+                       Residual deviance: 3323.1
+                       AIC: 3335.1")
+
+###############################################################################
+cat("Logistic regression model with selected predictors: ", summary.glm.1)
+cat("Logistic regression model with 4 predictors: ", summary.glm.2)
+cat("Logistic regression model with rf importance predictors: ", summary.glm.3)
+
+# The model with selected variables is a better fit for now since it has 
+# lower AIC and Residual deviance
+```
+
+```{r}
+## Lets predict using models on test data. 
+glm.pred.1 <- predict(glm.model.1, newdata = testing, type = "response")
+glm.pred.2 <- predict(glm.model.2, newdata = testing, type = "response")
+glm.pred.3 <- predict(glm.model.3, newdata = testing, type = "response")
+```
+
+```{r}
+## Lets predict using models on train data
+glm.pred.1.train <- predict(glm.model.1, data = training, type = "response")
+glm.pred.2.train <- predict(glm.model.2, data = training, type = "response")
+glm.pred.3.train <- predict(glm.model.3, data = training, type = "response")
+```
+
+## Lets convert the probabilites to class predictions
+
+```{r}
+glm.pred.class.1 <- ifelse(glm.pred.1 > 0.5, 1, 0) 
+glm.pred.class.2 <- ifelse(glm.pred.2 > 0.5, 1, 0)
+glm.pred.class.3 <- ifelse(glm.pred.3 > 0.5, 1, 0)
+
+glm.pred.train.class.1 <- ifelse(glm.pred.1.train > 0.5, 1, 0) 
+glm.pred.train.class.2 <- ifelse(glm.pred.2.train > 0.5, 1, 0) 
+glm.pred.train.class.3 <- ifelse(glm.pred.3.train > 0.5, 1, 0) 
+
+```
+
+## Create a confusion matrix
+
+```{r}
+table(glm.pred.class.1, testing$Attrition_Flag)
+table(glm.pred.class.2, testing$Attrition_Flag)
+table(glm.pred.class.3, testing$Attrition_Flag)
+
+table(glm.pred.train.class.1, testing$Attrition_Flag)
+table(glm.pred.train.class.2, testing$Attrition_Flag)
+table(glm.pred.train.class.3, testing$Attrition_Flag)
+
+```
+
+
+## Calculate the accuracy, compute the proportion of correct predictions on testing data
+
+```{r}
+accuracy.1 <- mean(glm.pred.class.1 == testing$Attrition_Flag)
+print(accuracy.1)
+
+accuracy.2 <- mean(glm.pred.class.2 == testing$Attrition_Flag)
+print(accuracy.2)
+
+accuracy.3 <- mean(glm.pred.class.3 == testing$Attrition_Flag)
+print(accuracy.3)
+```
+
+## Calculate the accuracy, compute the proportion of correct predictions on training data
+```{r}
+accuracy.1.train <- mean(glm.pred.train.class.1 == testing$Attrition_Flag)
+print(accuracy.1.train)
+
+accuracy.2.train <- mean(glm.pred.train.class.2 == testing$Attrition_Flag)
+print(accuracy.2.train)
+
+accuracy.3.train <- mean(glm.pred.train.class.3 == testing$Attrition_Flag)
+print(accuracy.3.train)
+```
+
+
+## Lets calculate the AUC and ROC for logistic regression models
+
+```{r}
+library(pROC)
+
+# Generate ROC Curve
+roc.curve.glm.1 <- roc(testing$Attrition_Flag, glm.pred.1)
+roc.curve.glm.2 <- roc(testing$Attrition_Flag, glm.pred.2)
+roc.curve.glm.3 <- roc(testing$Attrition_Flag, glm.pred.3)
+
+# Plot ROC Curve
+par(mfrow = c(1,1))
+plot(roc.curve.glm.1, main = "ROC Curve for Logistic Regression Model 1")
+plot(roc.curve.glm.2, main = "ROC Curve for Logistic Regression Model 2")
+plot(roc.curve.glm.3, main = "ROC Curve for Logistic Regression Model 3")
+
+# Compute the AUC
+auc(roc.curve.glm.1)
+auc(roc.curve.glm.2)
+auc(roc.curve.glm.3)
+
+## AUC is used for how well each model performs at distinguishing between the two
+## classes(attrited customer and existing customer)
+
+## glm.model.1 has the highest AUC, which is strong indicator that it performs
+## well. So the model is quite effective in predicting the correct class.
+```
+
+## Lastly lets calculate TPR(True positive rate) and FPR(False positive rate)
+
+```{r}
+con.matrix.1 <- table(glm.pred.class.1, testing$Attrition_Flag)
+con.matrix.2 <- table(glm.pred.class.2, testing$Attrition_Flag)
+con.matrix.3 <- table(glm.pred.class.3, testing$Attrition_Flag)
+```
+
+```{r}
+# Define the functions to calculate TPR and FPR
+tpr.calc <- function(tp, fn) {
+  return(tp / (tp + fn))
+}
+
+fpr.calc <- function(fp, tn) {
+  return(fp / (fp + tn))
+}
+
+# List of confusion matrices
+con.matrices <- list(con.matrix.1, con.matrix.2, con.matrix.3)
+
+# Loop through confusion matrices and calculate TPR and FPR
+for (i in 1:length(con.matrices)) {
+  cm <- con.matrices[[i]]
+  
+  tn <- cm[1,1]
+  tp <- cm[2,2]
+  fn <- cm[2,1]
+  fp <- cm[1,2]
+  
+  tpr <- tpr.calc(tp, fn)
+  fpr <- fpr.calc(fp, tn)
+  
+  cat("TPR model", i, ": ", tpr, "\n")
+  cat("FPR model", i, ": ", fpr, "\n")
+}
+
+# Got help from Google to create the loop.
+```
+
+## Lets work on Naive Bayes Model now. Train them on training data and predict on test data.
+
+```{r}
+library(e1071)
+set.seed(1)
+nb.model.1 <- naiveBayes(Attrition_Flag ~ Gender + Marital_Status + Total_Relationship_Count +
+                   Months_Inactive_12_mon + Contacts_Count_12_mon + Total_Revolving_Bal +
+                   Total_Amt_Chng_Q4_Q1 + Total_Trans_Amt + Total_Ct_Chng_Q4_Q1,
+                   data = training)
+
+nb.pred.1 <- predict(nb.model.1, newdata = testing)
+nb.1.con.matrix <- confusionMatrix(nb.pred.1, testing$Attrition_Flag)
+nb.1.con.matrix
+
+# Accuracy - 88.56% it indicates strong overall performance
+# 95% CI - The confidence interval shows that the model's performance reliable and consistent
+# NIR - 84%, since the accuracy is higher than NIR, it shows meaningful predictions
+# P-Value - very low p value indicates the model's accuracy is significantly better
+# then random guessing. 
+
+# Sensitivity - 96.1% meaning the model is very good at identifying existing customers
+# Specificity - 48.7% The model struggle to recognize customers who have actually attrited. 
+
+```
+
+
+```{r}
+nb.model.2 <- naiveBayes(Attrition_Flag ~ Total_Ct_Chng_Q4_Q1 + Total_Trans_Amt +
+                     Total_Relationship_Count + Total_Amt_Chng_Q4_Q1 + 
+                     Avg_Utilization_Ratio + Contacts_Count_12_mon,
+                   data = training)
+
+nb.pred.2 <- predict(nb.model.2, newdata = testing)
+nb.2.con.matrix <- confusionMatrix(nb.pred.2, testing$Attrition_Flag)
+nb.2.con.matrix
+
+# Accuracy - 86.73% it indicates strong overall performance
+# 95% CI - The confidence interval shows that the model's performance reliable and consistent
+# NIR - 84%, since the accuracy is higher than NIR, it shows meaningful predictions
+# P-Value - very low p value indicates the model's accuracy is significantly better
+# then random guessing. 
+
+# Sensitivity - 95.54% meaning the model is very good at identifying existing customers
+# Specificity - 40.12% The model struggle to recognize customers who have actually attrited. 
+
+```
+
+```{r}
+nb.model.3 <- naiveBayes(Attrition_Flag ~ Total_Trans_Amt + Total_Ct_Chng_Q4_Q1 + 
+                     Total_Revolving_Bal + Total_Amt_Chng_Q4_Q1 + 
+                     Total_Relationship_Count,
+                   data = training)
+
+nb.pred.3 <- predict(nb.model.3, newdata = testing)
+nb.3.con.matrix <- confusionMatrix(nb.pred.3, testing$Attrition_Flag)
+nb.3.con.matrix
+
+# Accuracy - 87.91% it indicates strong overall performance
+# 95% CI - The confidence interval shows that the model's performance reliable and consistent
+# NIR - 84%, since the accuracy is higher than NIR, it shows meaningful predictions
+# P-Value - very low p value indicates the model's accuracy is significantly better
+# then random guessing. 
+
+# Sensitivity - 96.55% meaning the model is very good at identifying existing customers
+# Specificity - 42.24% The model struggle to recognize customers who have actually attrited. 
+
+```
+
+## Lets use train data to predict naive bayes models accuracy. 
+
+```{r}
+nb.pred.1.train <- predict(nb.model.1, newdata = training)
+nb.1.con.matrix.train <- confusionMatrix(nb.pred.1.train, training$Attrition_Flag)
+nb.1.con.matrix.train
+
+# Accuracy - 88.8% it indicates strong overall performance
+# 95% CI - The confidence interval shows that the model's performance reliable and consistent
+# NIR - 83.76%, since the accuracy is higher than NIR, it shows meaningful predictions
+# P-Value - very low p value indicates the model's accuracy is significantly better
+# then random guessing. 
+
+# Sensitivity - 96.27% meaning the model is very good at identifying existing customers
+# Specificity - 50.24% The model struggle to recognize customers who have actually attrited. 
+
+```
+
+
+```{r}
+
+nb.pred.2.train <- predict(nb.model.2, newdata = training)
+nb.2.con.matrix.train <- confusionMatrix(nb.pred.2.train, training$Attrition_Flag)
+nb.2.con.matrix.train
+
+# Accuracy - 86.94% it indicates strong overall performance
+# 95% CI - The confidence interval shows that the model's performance reliable and consistent
+# NIR - 8376%, since the accuracy is higher than NIR, it shows meaningful predictions
+# P-Value - very low p value indicates the model's accuracy is significantly better
+# then random guessing. 
+
+# Sensitivity - 95.97% meaning the model is very good at identifying existing customers
+# Specificity - 40.39% The model struggle to recognize customers who have actually attrited. 
+
+```
+
+```{r}
+
+nb.pred.3.train <- predict(nb.model.3, newdata = training)
+nb.3.con.matrix.train <- confusionMatrix(nb.pred.3.train, training$Attrition_Flag)
+nb.3.con.matrix.train
+
+# Accuracy - 88.21% it indicates strong overall performance
+# 95% CI - The confidence interval shows that the model's performance reliable and consistent
+# NIR - 83.76%, since the accuracy is higher than NIR, it shows meaningful predictions
+# P-Value - very low p value indicates the model's accuracy is significantly better
+# then random guessing. 
+
+# Sensitivity - 96.84% meaning the model is very good at identifying existing customers
+# Specificity - 43.67% The model struggle to recognize customers who have actually attrited. 
+
+```
+
+### Calculate the AUC for naive Bayes models
+
+```{r}
+# Extract probabilities for the positive class
+nb.pred.1.pos <- predict(nb.model.1, newdata = testing, type = "raw")
+nb.pred.2.pos <- predict(nb.model.2, newdata = testing, type = "raw")
+nb.pred.3.pos <- predict(nb.model.3, newdata = testing, type = "raw")
+
+
+
+nb.pred.1.positive <- nb.pred.1.pos[ ,"1"]
+nb.pred.2.positive <- nb.pred.2.pos[ ,"1"]
+nb.pred.3.positive <- nb.pred.3.pos[ ,"1"]
+
+roc.nb.1 <- roc(testing$Attrition_Flag, nb.pred.1.positive)
+roc.nb.2 <- roc(testing$Attrition_Flag, nb.pred.2.positive)
+roc.nb.3 <- roc(testing$Attrition_Flag, nb.pred.3.positive)
+
+auc.nb.1 <- auc(roc.nb.1)
+auc.nb.2 <- auc(roc.nb.2)
+auc.nb.3 <- auc(roc.nb.3)
+
+cat("AUC for naive Bayes Model 1: ", auc.nb.1)
+cat("AUC for naive Bayes Model 2: ", auc.nb.2)
+cat("AUC for naive Bayes Model 3: ", auc.nb.3)
+
+```
+
+
+## Lets Create KNN Model 
+
+```{r}
+## We need to convert all the predictors to numeric to work in KNN models.
+set.seed(1)
+training_scale <- training
+testing_scale <- testing
+
+str(training_scale)
+training_scale$Card_Category <- as.numeric(training_scale$Card_Category)
+training_scale$Gender <- as.numeric(training_scale$Gender)
+training_scale$Education_Level <- as.numeric(training_scale$Education_Level)
+training_scale$Marital_Status <- as.numeric(training_scale$Marital_Status)
+training_scale$Income_Category <- as.numeric(training_scale$Income_Category)
+training_scale$Attrition_Flag <- as.numeric(training_scale$Attrition_Flag)
+
+
+str(testing_scale)
+testing_scale$Card_Category <- as.numeric(testing_scale$Card_Category)
+testing_scale$Gender <- as.numeric(testing_scale$Gender)
+testing_scale$Education_Level <- as.numeric(testing_scale$Education_Level)
+testing_scale$Marital_Status <- as.numeric(testing_scale$Marital_Status)
+testing_scale$Income_Category <- as.numeric(testing_scale$Income_Category)
+testing_scale$Attrition_Flag <- as.numeric(testing_scale$Attrition_Flag)
+```
+
+## Then Scale the Data(Important for KNN)
+
+```{r}
+# Scaling the training and testing data (excluding the target variable)
+training_scale <- scale(training_scale[,-which(names(training_scale)=="Attrition_Flag")])
+testing_scale <- scale(testing_scale[,-which(names(testing_scale)=="Attrition_Flag")])
+
+```
+
+## Fit the KNN Model now
+
+```{r}
+# Set the number of neighbors
+set.seed(1)
+k <- 10
+
+#Fit the kNN model using training data
+knn.model.1 <- knn(train = training_scale, test = testing_scale, cl = training$Attrition_Flag, k = k)
+
+
+## Evaluate the model (Confusion Matrix) on testing data
+knn.1.con.matrix <- confusionMatrix(knn.model.1, testing$Attrition_Flag)
+print(knn.1.con.matrix)
+
+## Accuracy is 0.8987, it is a high accuracy rate for the model. 
+
+## Evaluate the model(Confusion matrix) on training data
+knn.1.con.matrix.train <- confusionMatrix(knn.model.1, training$Attrition_Flag)
+print(knn.1.con.matrix.train)
+
+## To check the AUC I need to have probabilities, I could use knn3 from caret package
+## to calculate the AUC for the specific predictors but it wouldn't be the knn's 
+## AUC. 
+```
+
+## Lets create random forest model 1 using best subset selection predictors
+
+```{r}
+## We created rf.model.1 before by using predictors from best subset selection.
+set.seed(1)
+rf.model.1 <- randomForest(Attrition_Flag ~ Gender + Marital_Status +
+                           Total_Relationship_Count + Months_Inactive_12_mon +
+                           Contacts_Count_12_mon + Total_Revolving_Bal +
+                           Total_Amt_Chng_Q4_Q1 + Total_Trans_Amt + Total_Ct_Chng_Q4_Q1,
+                         data = training, importance = TRUE)
+
+rf.pred.1 <- predict(rf.model.1, newdata = testing, type = "prob")
+# Get probability of positive class(Attrition = 1)
+rf.pred.1.positive <- rf.pred.1[,2]
+# calculate the ROC curve
+rf.1.roc <- roc(testing$Attrition_Flag, rf.pred.1.positive)
+# Auc for random forest
+rf.1.auc <- auc(rf.1.roc)
+cat("AUC for Random forest model 1: ", rf.1.auc)
+
+# Confusion matrix for random forest model 1
+rf.pred.1.class <- predict(rf.model.1, newdata = testing)
+rf.1.con.matrix <- confusionMatrix(rf.pred.1.class, testing$Attrition_Flag)
+print(rf.1.con.matrix)
+```
+
+## Lets create random forest model 2 by using random forest features with high importance rate
+
+```{r}
+set.seed(1)
+rf.model.2 <- randomForest(Attrition_Flag ~ Total_Trans_Amt + Total_Ct_Chng_Q4_Q1 + 
+                     Total_Revolving_Bal + Total_Amt_Chng_Q4_Q1 + 
+                     Total_Relationship_Count,
+                         data = training, importance = TRUE)
+
+rf.pred.2 <- predict(rf.model.2, newdata = testing, type = "prob")
+# Get probability of positive class(Attrition = 1)
+rf.pred.2.positive <- rf.pred.2[,2]
+# calculate the ROC curve
+rf.2.roc <- roc(testing$Attrition_Flag, rf.pred.2.positive)
+# Auc for random forest
+rf.2.auc <- auc(rf.2.roc)
+cat("AUC for Random forest model 1: ", rf.2.auc)
+
+# Confusion matrix for random forest model 1
+rf.pred.2.class <- predict(rf.model.2, newdata = testing)
+rf.2.con.matrix <- confusionMatrix(rf.pred.2.class, testing$Attrition_Flag)
+print(rf.2.con.matrix)
+```
+
+## Lets create Boosting model now lastly
+
+```{r}
+set.seed(1)
+library(gbm)
+# Convert the target variable to numeric (0 for No Attrition, 1 for Attrition)
+training$Attrition_Flag <- as.numeric(training$Attrition_Flag) - 1
+
+
+# Fit the Boosting Model(Gradient Boosting)
+boosting.model.1 <- gbm(Attrition_Flag ~ Gender + Marital_Status +
+                           Total_Relationship_Count + Months_Inactive_12_mon +
+                           Contacts_Count_12_mon + Total_Revolving_Bal +
+                           Total_Amt_Chng_Q4_Q1 + Total_Trans_Amt + Total_Ct_Chng_Q4_Q1,
+                        data = training, distribution = "bernoulli", n.trees = 100,
+                        interaction.depth = 4)
+
+# Predict Probabilities for AUC
+boosting.pred.1 <- predict(boosting.model.1, newdata = testing, type = "response", n.trees = 100)
+
+# Calculate the ROC curve
+roc.boosting.1 <- roc(testing$Attrition_Flag, boosting.pred.1)
+
+# AUC for Boosting
+auc.boosting.1 <- auc(roc.boosting.1) 
+cat("AUC for Boostong model 1: ", auc.boosting.1)
+
+# Confussion matrix for other metrics
+boosting.1.pred.class <- ifelse(boosting.pred.1 > 0.5, 1, 0)
+boosting.1.con.matrix <- confusionMatrix(as.factor(boosting.1.pred.class), as.factor(testing$Attrition_Flag))
+print(boosting.1.con.matrix)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
